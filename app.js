@@ -83,6 +83,12 @@ const ragInput = document.getElementById('rag-input');
 const ragBtn = document.getElementById('rag-btn');
 const ragResults = document.getElementById('rag-results');
 const ragStatus = document.getElementById('rag-status');
+const filterYear = document.getElementById('filter-year');
+const filterMonth = document.getElementById('filter-month');
+const filterSpeaker = document.getElementById('filter-speaker');
+const filterOptionsStatus = document.getElementById('filter-options-status');
+const clearFiltersBtn = document.getElementById('clear-filters-btn');
+let searchFilterOptionsLoaded = false;
 
 // ============================================
 // SETUP BANNER DETECTION
@@ -286,6 +292,63 @@ function showApp(user) {
     if (userEmailSpan) userEmailSpan.textContent = user.email;
     // Check search readiness when user logs in
     checkSearchReadiness();
+    loadSearchFilterOptions();
+}
+
+// Load choices from actual database values instead of hardcoding years/months/speakers.
+async function loadSearchFilterOptions() {
+    if (!supabaseClient || searchFilterOptionsLoaded) return;
+
+    try {
+        const { data, error } = await supabaseClient.rpc('get_search_filter_options');
+        if (error) throw error;
+        const rows = data || [];
+
+        populateFilterOptions(filterYear,
+            [...new Set(rows.map(row => row.year).filter(value => value != null))]
+                .sort((a, b) => Number(b) - Number(a)), 'All years');
+        populateFilterOptions(filterMonth,
+            [...new Set(rows.map(row => row.season).filter(Boolean))]
+                .sort((a, b) => String(a).localeCompare(String(b))), 'All months');
+        populateFilterOptions(filterSpeaker,
+            [...new Set(rows.map(row => row.speaker).filter(value => value && value.trim()))]
+                .sort((a, b) => String(a).localeCompare(String(b))), 'All speakers');
+
+        searchFilterOptionsLoaded = true;
+        if (filterOptionsStatus) {
+            filterOptionsStatus.textContent = rows.length
+                ? 'Filter choices are based on values in the database.'
+                : 'No filter values are currently available in the database.';
+        }
+        if (clearFiltersBtn) clearFiltersBtn.disabled = false;
+    } catch (error) {
+        console.error('Could not load search filter options:', error.message);
+        if (filterOptionsStatus) {
+            filterOptionsStatus.textContent = 'Could not load filter choices. Check the database function and refresh.';
+        }
+    }
+}
+
+function populateFilterOptions(select, values, allLabel) {
+    if (!select) return;
+    select.replaceChildren(new Option(allLabel, ''));
+    for (const value of values) select.add(new Option(String(value), String(value)));
+    select.disabled = false;
+}
+
+function getSearchFilters() {
+    return {
+        year: filterYear?.value ? Number(filterYear.value) : null,
+        season: filterMonth?.value || null,
+        speaker: filterSpeaker?.value || null
+    };
+}
+
+function applySearchFilters(query, filters = getSearchFilters()) {
+    if (filters.year != null) query = query.eq('year', filters.year);
+    if (filters.season) query = query.eq('season', filters.season);
+    if (filters.speaker) query = query.eq('speaker', filters.speaker);
+    return query;
 }
 
 function showMessage(text, type) {
@@ -416,11 +479,12 @@ async function keywordSearch() {
 
     try {
         // Search sentence_embeddings that contain the keyword (case-insensitive)
-        const { data, error } = await supabaseClient
+        let request = supabaseClient
             .from('sentence_embeddings')
             .select('text, talk_id, title, speaker, url')
-            .ilike('text', `%${query}%`)
-            .limit(20);
+            .ilike('text', `%${query}%`);
+        request = applySearchFilters(request);
+        const { data, error } = await request.limit(20);
 
         if (error) throw new Error(`Search failed: ${error.message}`);
 
@@ -483,7 +547,7 @@ async function semanticSearch() {
         const embedding = await getEmbedding(query);
 
         // Step 2: Search for similar sentences
-        const results = await searchSentences(embedding);
+        const results = await searchSentences(embedding, getSearchFilters());
 
         if (!results || results.length === 0) {
             showResults('semantic', '<div class="no-results">No similar content found. Try a different query.</div>');
@@ -531,13 +595,19 @@ async function askQuestion() {
         const embedding = await getEmbedding(question);
 
         // Step 2: Search for similar sentences
-        const results = await searchSentences(embedding);
+        const filters = getSearchFilters();
+        const results = await searchSentences(embedding, filters);
+
+        if (!results || results.length === 0) {
+            showResults('rag', '<div class="no-results">No talks matched those filters. Try clearing one or more filters.</div>');
+            return;
+        }
 
         // Step 3: Group by talk (with similarity scores and URLs)
         const topTalks = groupByTalk(results);
 
         // Step 4: Fetch full talk text for richer context
-        const enrichedTalks = await fetchFullTalkText(topTalks);
+        const enrichedTalks = await fetchFullTalkText(topTalks, filters);
 
         // Step 5: Generate answer with full context
         const answer = await generateAnswer(question, enrichedTalks);
@@ -597,12 +667,15 @@ async function getEmbedding(text) {
 }
 
 // Search sentences using vector similarity
-async function searchSentences(embedding) {
+async function searchSentences(embedding, filters = {}) {
     if (!supabaseClient) throw new Error('Supabase not configured');
 
     const { data, error } = await supabaseClient.rpc('match_sentences', {
         query_embedding: embedding,
-        match_count: 20
+        match_count: 20,
+        filter_year: filters.year ?? null,
+        filter_season: filters.season ?? null,
+        filter_speaker: filters.speaker ?? null
     });
 
     if (error) throw new Error(`Database search failed: ${error.message}`);
@@ -647,17 +720,19 @@ function groupByTalk(sentences) {
 
 // Fetch full talk text by querying all sentences for given talk_ids, ordered by sentence_num.
 // Uses a single batched query via .in() for all talk_ids — no parallel calls needed.
-async function fetchFullTalkText(talks) {
+async function fetchFullTalkText(talks, filters = {}) {
     if (!supabaseClient || !talks.length) return talks;
 
     const talkIds = talks.map(t => t.talk_id);
 
-    const { data, error } = await supabaseClient
+    let request = supabaseClient
         .from('sentence_embeddings')
         .select('talk_id, sentence_num, text')
         .in('talk_id', talkIds)
         .order('talk_id')
         .order('sentence_num');
+    request = applySearchFilters(request, filters);
+    const { data, error } = await request;
 
     if (error || !data) {
         console.warn('Failed to fetch full talk text, using snippets:', error?.message);
@@ -750,6 +825,12 @@ if (semanticInput) semanticInput.addEventListener('keypress', (e) => {
 if (ragBtn) ragBtn.addEventListener('click', askQuestion);
 if (ragInput) ragInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') askQuestion();
+});
+
+if (clearFiltersBtn) clearFiltersBtn.addEventListener('click', () => {
+    if (filterYear) filterYear.value = '';
+    if (filterMonth) filterMonth.value = '';
+    if (filterSpeaker) filterSpeaker.value = '';
 });
 
 // ============================================

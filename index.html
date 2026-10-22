@@ -84,6 +84,26 @@
         </nav>
 
         <div class="container">
+            <section class="search-filters" aria-labelledby="filters-heading">
+                <div class="filters-heading">
+                    <div>
+                        <h3 id="filters-heading">Filter searches</h3>
+                        <p id="filter-options-status" class="filter-status" aria-live="polite">Loading available filters…</p>
+                    </div>
+                    <button type="button" id="clear-filters-btn" class="btn-secondary" disabled>Clear filters</button>
+                </div>
+                <div class="filter-controls">
+                    <label for="filter-year">Year
+                        <select id="filter-year" disabled><option value="">All years</option></select>
+                    </label>
+                    <label for="filter-month">Month
+                        <select id="filter-month" disabled><option value="">All months</option></select>
+                    </label>
+                    <label for="filter-speaker">Speaker
+                        <select id="filter-speaker" disabled><option value="">All speakers</option></select>
+                    </label>
+                </div>
+            </section>
             <div class="search-panels">
                 <!-- Panel 1: Keyword Search -->
                 <div class="search-panel" id="keyword-panel">

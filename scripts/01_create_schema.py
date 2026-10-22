@@ -113,16 +113,43 @@ ON page_views FOR SELECT
 TO anon, authenticated
 USING (true);
 
--- Create function for similarity search
+-- Return distinct filter values sourced from rows the signed-in user can read.
+CREATE OR REPLACE FUNCTION get_search_filter_options()
+RETURNS TABLE (
+  year integer,
+  season text,
+  speaker text
+)
+LANGUAGE sql STABLE
+AS $$
+  SELECT DISTINCT
+    se.year,
+    se.season,
+    se.speaker
+  FROM sentence_embeddings AS se
+  WHERE se.year IS NOT NULL
+     OR se.season IS NOT NULL
+     OR (se.speaker IS NOT NULL AND btrim(se.speaker) <> '')
+  ORDER BY se.year DESC NULLS LAST, se.season NULLS LAST, se.speaker NULLS LAST;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_search_filter_options() TO authenticated;
+
+-- Recreate similarity search with optional year, month (stored as season), and speaker filters.
+DROP FUNCTION IF EXISTS match_sentences(vector, integer);
 CREATE OR REPLACE FUNCTION match_sentences(
   query_embedding vector(1536),
-  match_count int DEFAULT 20
+  match_count int DEFAULT 20,
+  filter_year integer DEFAULT NULL,
+  filter_season text DEFAULT NULL,
+  filter_speaker text DEFAULT NULL
 )
 RETURNS TABLE (
   id uuid,
   talk_id uuid,
   title text,
   speaker text,
+  url text,
   text text,
   similarity float
 )
@@ -133,12 +160,18 @@ AS $$
     sentence_embeddings.talk_id,
     sentence_embeddings.title,
     sentence_embeddings.speaker,
+    sentence_embeddings.url,
     sentence_embeddings.text,
     1 - (sentence_embeddings.embedding <=> query_embedding) as similarity
   FROM sentence_embeddings
+  WHERE (filter_year IS NULL OR sentence_embeddings.year = filter_year)
+    AND (filter_season IS NULL OR sentence_embeddings.season = filter_season)
+    AND (filter_speaker IS NULL OR sentence_embeddings.speaker = filter_speaker)
   ORDER BY sentence_embeddings.embedding <=> query_embedding
   LIMIT match_count;
 $$;
+
+GRANT EXECUTE ON FUNCTION match_sentences(vector, integer, integer, text, text) TO authenticated;
 """
 
     url = f"https://api.supabase.com/v1/projects/{SUPABASE_PROJECT_REF}/database/query"
