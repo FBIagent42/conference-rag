@@ -90,6 +90,9 @@ const filterOptionsStatus = document.getElementById('filter-options-status');
 const clearFiltersBtn = document.getElementById('clear-filters-btn');
 let searchFilterOptionsLoaded = false;
 
+// Choose which text chunks the site searches. Set to 'sentence' to switch back.
+const SEARCH_CHUNK_TYPE = 'paragraph';
+
 // ============================================
 // SETUP BANNER DETECTION
 // ============================================
@@ -344,6 +347,14 @@ function getSearchFilters() {
     };
 }
 
+function getChunkType() {
+    return SEARCH_CHUNK_TYPE;
+}
+
+function getChunkTableName(chunkType = getChunkType()) {
+    return chunkType === 'paragraph' ? 'paragraph_embeddings' : 'sentence_embeddings';
+}
+
 function applySearchFilters(query, filters = getSearchFilters()) {
     if (filters.year != null) query = query.eq('year', filters.year);
     if (filters.season) query = query.eq('season', filters.season);
@@ -381,9 +392,11 @@ async function checkSearchReadiness() {
     readinessCheckRunning = true;
 
     try {
-        // --- Check 1: Any data at all? (keyword search just needs text) ---
+        const tableName = getChunkTableName();
+
+        // --- Check 1: Any data for the selected chunk type? ---
         const { count: totalCount, error: totalError } = await supabaseClient
-            .from('sentence_embeddings')
+            .from(tableName)
             .select('*', { count: 'exact', head: true });
 
         const hasData = !totalError && totalCount > 0;
@@ -393,7 +406,7 @@ async function checkSearchReadiness() {
         let hasEmbeddings = false;
         if (hasData) {
             const { count, error } = await supabaseClient
-                .from('sentence_embeddings')
+                .from(tableName)
                 .select('*', { count: 'exact', head: true })
                 .not('embedding', 'is', null);
             hasEmbeddings = !error && count > 0;
@@ -478,9 +491,9 @@ async function keywordSearch() {
     clearResults('keyword');
 
     try {
-        // Search sentence_embeddings that contain the keyword (case-insensitive)
+        // Search the selected chunk type for the keyword (case-insensitive)
         let request = supabaseClient
-            .from('sentence_embeddings')
+            .from(getChunkTableName())
             .select('text, talk_id, title, speaker, url')
             .ilike('text', `%${query}%`);
         request = applySearchFilters(request);
@@ -502,10 +515,10 @@ async function keywordSearch() {
                     title: row.title || 'Unknown Talk',
                     speaker: row.speaker || 'Unknown Speaker',
                     url: row.url || '',
-                    sentences: []
+                    chunks: []
                 };
             }
-            talks[talkId].sentences.push(highlightKeyword(row.text, query));
+            talks[talkId].chunks.push(highlightKeyword(row.text, query));
         }
 
         let html = '';
@@ -513,7 +526,7 @@ async function keywordSearch() {
             html += `<div class="result-card">
                 <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
                 <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
-                <div class="result-sentences">${talk.sentences.slice(0, 3).join('<br>')}</div>
+                <div class="result-sentences">${talk.chunks.slice(0, 3).join('<br>')}</div>
             </div>`;
         }
         showResults('keyword', html);
@@ -546,8 +559,8 @@ async function semanticSearch() {
         // Step 1: Get embedding
         const embedding = await getEmbedding(query);
 
-        // Step 2: Search for similar sentences
-        const results = await searchSentences(embedding, getSearchFilters());
+        // Step 2: Search the selected sentence or paragraph embeddings
+        const results = await searchChunks(embedding, getSearchFilters());
 
         if (!results || results.length === 0) {
             showResults('semantic', '<div class="no-results">No similar content found. Try a different query.</div>');
@@ -594,9 +607,10 @@ async function askQuestion() {
         // Step 1: Get embedding
         const embedding = await getEmbedding(question);
 
-        // Step 2: Search for similar sentences
+        // Step 2: Search the selected sentence or paragraph embeddings
         const filters = getSearchFilters();
-        const results = await searchSentences(embedding, filters);
+        const chunkType = getChunkType();
+        const results = await searchChunks(embedding, filters, chunkType);
 
         if (!results || results.length === 0) {
             showResults('rag', '<div class="no-results">No talks matched those filters. Try clearing one or more filters.</div>');
@@ -607,7 +621,7 @@ async function askQuestion() {
         const topTalks = groupByTalk(results);
 
         // Step 4: Fetch full talk text for richer context
-        const enrichedTalks = await fetchFullTalkText(topTalks, filters);
+        const enrichedTalks = await fetchFullTalkText(topTalks, filters, chunkType);
 
         // Step 5: Generate answer with full context
         const answer = await generateAnswer(question, enrichedTalks);
@@ -666,11 +680,12 @@ async function getEmbedding(text) {
     return data.embedding;
 }
 
-// Search sentences using vector similarity
-async function searchSentences(embedding, filters = {}) {
+// Search the selected sentence or paragraph chunks using vector similarity.
+async function searchChunks(embedding, filters = {}, chunkType = getChunkType()) {
     if (!supabaseClient) throw new Error('Supabase not configured');
 
-    const { data, error } = await supabaseClient.rpc('match_sentences', {
+    const rpcName = chunkType === 'paragraph' ? 'match_paragraphs' : 'match_sentences';
+    const { data, error } = await supabaseClient.rpc(rpcName, {
         query_embedding: embedding,
         match_count: 20,
         filter_year: filters.year ?? null,
@@ -682,55 +697,55 @@ async function searchSentences(embedding, filters = {}) {
     return data;
 }
 
-// Group search results by talk, computing average similarity per talk
-function groupByTalk(sentences) {
+// Group matching chunks by talk, computing average similarity per talk
+function groupByTalk(chunks) {
     const talkMap = {};
 
-    for (const sent of sentences) {
-        if (!talkMap[sent.talk_id]) {
-            talkMap[sent.talk_id] = {
-                talk_id: sent.talk_id,
-                title: sent.title,
-                speaker: sent.speaker,
-                url: sent.url,
-                sentences: [],
+    for (const chunk of chunks) {
+        if (!talkMap[chunk.talk_id]) {
+            talkMap[chunk.talk_id] = {
+                talk_id: chunk.talk_id,
+                title: chunk.title,
+                speaker: chunk.speaker,
+                url: chunk.url,
+                chunks: [],
                 totalSimilarity: 0
             };
         }
-        talkMap[sent.talk_id].sentences.push(sent.text);
-        talkMap[sent.talk_id].totalSimilarity += sent.similarity;
+        talkMap[chunk.talk_id].chunks.push(chunk.text);
+        talkMap[chunk.talk_id].totalSimilarity += chunk.similarity;
     }
 
     return Object.values(talkMap)
-        .sort((a, b) => b.totalSimilarity / b.sentences.length - a.totalSimilarity / a.sentences.length)
+        .sort((a, b) => b.totalSimilarity / b.chunks.length - a.totalSimilarity / a.chunks.length)
         .slice(0, 3)
         .map(talk => ({
             talk_id: talk.talk_id,
             title: talk.title,
             speaker: talk.speaker,
             url: talk.url,
-            text: talk.sentences.join(' '),
+            text: talk.chunks.join(' '),
             // TODO: Is average similarity the right metric? Alternatives worth researching:
             // - Max similarity (best single match per talk)
-            // - Average of top-3 sentences (reduces noise from weak matches)
-            // - Weighted by sentence count (rewards talks with more matches)
-            avgSimilarity: talk.totalSimilarity / talk.sentences.length
+            // - Average of the strongest matching chunks
+            avgSimilarity: talk.totalSimilarity / talk.chunks.length
         }));
 }
 
-// Fetch full talk text by querying all sentences for given talk_ids, ordered by sentence_num.
+// Fetch all chunks for selected talks in their original order.
 // Uses a single batched query via .in() for all talk_ids — no parallel calls needed.
-async function fetchFullTalkText(talks, filters = {}) {
+async function fetchFullTalkText(talks, filters = {}, chunkType = getChunkType()) {
     if (!supabaseClient || !talks.length) return talks;
 
     const talkIds = talks.map(t => t.talk_id);
+    const orderColumn = chunkType === 'paragraph' ? 'paragraph_num' : 'sentence_num';
 
     let request = supabaseClient
-        .from('sentence_embeddings')
-        .select('talk_id, sentence_num, text')
+        .from(getChunkTableName(chunkType))
+        .select(`talk_id, ${orderColumn}, text`)
         .in('talk_id', talkIds)
         .order('talk_id')
-        .order('sentence_num');
+        .order(orderColumn);
     request = applySearchFilters(request, filters);
     const { data, error } = await request;
 
@@ -739,7 +754,7 @@ async function fetchFullTalkText(talks, filters = {}) {
         return talks;
     }
 
-    // Group fetched sentences by talk_id
+    // Group fetched text chunks by talk_id
     const fullTextMap = {};
     for (const row of data) {
         if (!fullTextMap[row.talk_id]) fullTextMap[row.talk_id] = [];

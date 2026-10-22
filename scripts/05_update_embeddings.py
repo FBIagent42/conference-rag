@@ -1,17 +1,16 @@
 """
 Step 5: Import Embeddings to Database
 =========================================
-Reads scripts/output/sentences_with_embeddings.json and imports
-all records (text + embeddings) to Supabase, replacing any
-existing data.
+Reads scripts/output/paragraphs_with_embeddings.json and upserts
+paragraph records (text + embeddings), preserving sentence-level data.
 
-After this step, SEMANTIC SEARCH will light up green on your site!
+After this step, paragraph-level semantic search will be ready on your site.
 
 Usage:
     python scripts/05_update_embeddings.py
 
 Input:
-    scripts/output/sentences_with_embeddings.json  — from Step 4
+    scripts/output/paragraphs_with_embeddings.json  — from Step 4
 
 Prerequisites:
     - config.public.json with Supabase URL and anon key
@@ -29,8 +28,10 @@ from supabase import create_client
 from tqdm import tqdm
 
 
-INPUT_FILE = os.path.join('scripts', 'output', 'sentences_with_embeddings.json')
-BATCH_SIZE = 100
+INPUT_FILE = os.path.join('scripts', 'output', 'paragraphs_with_embeddings.json')
+# Keep vector upserts small so Postgres can update the paragraph table and its
+# vector index before the database statement timeout is reached.
+BATCH_SIZE = 10
 
 
 def load_config():
@@ -39,6 +40,34 @@ def load_config():
     with open('config.secret.json', 'r') as f:
         secrets = json.load(f)
     return public_config, secrets
+
+
+def load_existing_embedded_texts(client):
+    """Return the text for paragraph rows that already have a vector."""
+    existing = {}
+    page_size = 1000
+    offset = 0
+
+    while True:
+        response = (
+            client.table('paragraph_embeddings')
+            .select('talk_id,paragraph_num,text')
+            .not_.is_('embedding', 'null')
+            .order('talk_id')
+            .order('paragraph_num')
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        page = response.data or []
+        for row in page:
+            key = (row['talk_id'], row['paragraph_num'])
+            existing[key] = row['text']
+
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    return existing
 
 
 def main():
@@ -64,34 +93,35 @@ def main():
     public_config, secrets = load_config()
     client = create_client(public_config['SUPABASE_URL'], secrets['SUPABASE_SERVICE_KEY'])
 
-    # Truncate existing data and re-import everything
+    # Skip vectors already stored for identical paragraph text. This makes a
+    # rerun resume after a timeout instead of re-upserting every successful row.
+    existing_texts = load_existing_embedded_texts(client)
+    pending_records = [
+        record for record in records
+        if existing_texts.get((record['talk_id'], record['paragraph_num'])) != record['text']
+    ]
+    already_done = len(records) - len(pending_records)
+    print(f"   Already embedded and unchanged: {already_done:,}")
+    print(f"   Need upload or refresh:         {len(pending_records):,}")
+
+    # Upsert paragraph rows only. Existing sentence_embeddings data is untouched.
     print("\n" + "=" * 60)
-    print("Replacing database contents (truncate + re-import)")
+    print("Updating paragraph embeddings (sentence embeddings are preserved)")
     print("=" * 60)
 
-    try:
-        result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
-        existing_count = result.count or 0
-        if existing_count > 0:
-            print(f"   Truncating {existing_count:,} existing rows...")
-            client.table('sentence_embeddings').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            print("   ✅ Table truncated.")
-        else:
-            print("   Table is empty — ready for import.")
-    except Exception as e:
-        print(f"   ⚠️ Could not check existing data: {e}")
-        print("   Proceeding with import anyway...")
-
-    # Batch import (much faster than individual updates!)
-    print(f"\n   Importing {len(records):,} records in batches of {BATCH_SIZE}...\n")
+    # Upsert is safe to rerun: the table has a unique (talk_id, paragraph_num) key.
+    print(f"\n   Updating {len(pending_records):,} records in batches of {BATCH_SIZE}...\n")
 
     success = 0
     errors = 0
 
-    for i in tqdm(range(0, len(records), BATCH_SIZE), desc="Importing"):
-        batch = records[i:i + BATCH_SIZE]
+    for i in tqdm(range(0, len(pending_records), BATCH_SIZE), desc="Importing"):
+        batch = pending_records[i:i + BATCH_SIZE]
         try:
-            client.table('sentence_embeddings').insert(batch).execute()
+            client.table('paragraph_embeddings').upsert(
+                batch,
+                on_conflict='talk_id,paragraph_num'
+            ).execute()
             success += len(batch)
         except Exception as e:
             print(f"\nError at batch {i // BATCH_SIZE}: {e}")
@@ -104,10 +134,10 @@ def main():
         print(f"   Errors:  {errors:,}")
 
     # Verify
-    result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
+    result = client.table('paragraph_embeddings').select('id', count='exact').limit(1).execute()
     total = result.count or 0
 
-    embedded_result = client.table('sentence_embeddings') \
+    embedded_result = client.table('paragraph_embeddings') \
         .select('id', count='exact') \
         .not_.is_('embedding', 'null') \
         .limit(1).execute()

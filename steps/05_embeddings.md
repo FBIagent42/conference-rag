@@ -8,7 +8,7 @@
 
 ## What You'll Learn
 - What vector embeddings are and how they represent meaning
-- Why we split text into sentences (chunking strategy)
+- How paragraph-level chunking changes semantic search
 - How OpenAI's embedding API works
 - What Edge Functions are and why we need them
 - How to deploy serverless functions with the Supabase CLI
@@ -30,12 +30,12 @@ python scripts/04_embed_data.py
 ```
 
 This script:
-1. Reads `scripts/output/sentences.json`
-2. Calls OpenAI's `text-embedding-3-small` to generate a 1,536-dimensional vector for each sentence
-3. Saves results to `scripts/output/sentences_with_embeddings.json`
+1. Reads `scripts/output/paragraphs.json`
+2. Calls OpenAI's `text-embedding-3-small` to generate a 1,536-dimensional vector for each paragraph chunk
+3. Saves results to `scripts/output/paragraphs_with_embeddings.json`
 4. Supports resuming if interrupted (your progress is saved!)
 
-> ⏱️ **This takes 10-15 minutes** and costs ~$0.60 in OpenAI API usage.
+> ⏱️ Runtime and cost depend on the total text and current API rates. Paragraphs reduce chunk count, while the overall text volume stays similar.
 > 💰 **Your embeddings are safe**: They're saved to disk in `scripts/output/`, so even if the next step fails, you won't pay twice.
 
 ### Step 5b: Update Database with Embeddings
@@ -54,9 +54,9 @@ This reads the saved embeddings and updates each row in the database.
 [0.012, -0.034, 0.089, ... 1,536 dimensions]
 ```
 
-Similar sentences produce similar vectors. This is what enables semantic search — finding content by **meaning** rather than exact keywords.
+Similar paragraphs produce similar vectors. The app lets you choose sentence or paragraph chunks for searches, so you can compare precision and context length.
 
-> 💡 **Ask your AI assistant**: *"What are the trade-offs between different chunking strategies in RAG systems? Why did we choose sentence-level chunking?"*
+> 💡 **Ask your AI assistant**: *"What are the trade-offs between sentence-level and paragraph-level chunking in RAG systems?"*
 
 ### Step 5c: Create & Deploy the embed-question Edge Function
 
@@ -135,7 +135,7 @@ Try searching for *"How can I find peace during hard times?"* — notice how it 
 ## Verification
 
 - [ ] `04_embed_data.py` completes and reports embeddings generated
-- [ ] `scripts/output/sentences_with_embeddings.json` exists (your safety net!)
+- [ ] `scripts/output/paragraphs_with_embeddings.json` exists (your safety net!)
 - [ ] `05_update_embeddings.py` completes and reports rows updated
 - [ ] `supabase --version` shows a version number
 - [ ] `embed-question` function deployed without errors

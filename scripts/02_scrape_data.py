@@ -114,7 +114,13 @@ def scrape_talk(talk_url, session):
     if not content_div:
         return None
 
-    content = " ".join(p.text.strip() for p in content_div.find_all("p"))
+    # Preserve source paragraph boundaries so the import step can embed each
+    # paragraph as a separate retrieval chunk.
+    paragraphs = [
+        re.sub(r"\s+", " ", p.get_text(" ", strip=True)).strip()
+        for p in content_div.find_all("p")
+    ]
+    content = "\n\n".join(paragraph for paragraph in paragraphs if paragraph)
 
     year_match = re.search(r'/(\d{4})/', talk_url)
     year = int(year_match.group(1)) if year_match else None

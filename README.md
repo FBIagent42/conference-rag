@@ -56,8 +56,8 @@ Your AI assistant will automatically read [`ai_agent_instructions.md`](ai_agent_
        │         ↓ Returns embedding vector
        │
        ├─── Supabase Database (pgvector)
-       │         ↓ match_sentences()
-       │         ↓ Returns similar sentences
+       │         ↓ match_sentences() or match_paragraphs()
+       │         ↓ Returns similar chunks (selected in the UI)
        │
        └─── Edge Function: generate-answer
                 ↓ GPT-4o (server-side 🔒)

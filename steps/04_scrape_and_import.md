@@ -71,12 +71,12 @@ python scripts/03_import_data.py
 
 This script:
 1. Reads `scripts/output/talks.json`
-2. Splits ~400 talks into ~80,000 sentences
-3. Imports all sentences to the `sentence_embeddings` table (**text only** — no embeddings yet)
-4. Saves `scripts/output/sentences.json` locally (for the embedding step)
+2. Splits each talk into paragraph chunks, preserving source paragraph breaks
+3. Imports paragraph text to `paragraph_embeddings` (**text only** — no embeddings yet), leaving `sentence_embeddings` untouched
+4. Saves `scripts/output/paragraphs.json` locally (for the embedding step)
 5. Verifies the final row count
 
-> 💡 **Check scripts/output/**: After running, look at `scripts/output/talks.json` and `scripts/output/sentences.json` to see the intermediate data. This is what the whole pipeline is processing!
+> 💡 **Check scripts/output/**: After running, look at `scripts/output/talks.json` and `scripts/output/paragraphs.json` to see the intermediate data. Re-run `02_scrape_data.py` first so the talk text contains paragraph breaks. Older flattened files are grouped into bounded fallback chunks.
 
 > 💡 **Why no embeddings yet?** We import the text first so you can see keyword search working right away. Embeddings take ~15 minutes to generate and are added in Step 5. This separation lets you experience the difference between keyword search (works now!) and semantic search (next step).
 
@@ -94,9 +94,9 @@ Try searching for `"faith"` or `"temple"` — you should see results!
 
 - [ ] `02_scrape_data.py` completes and reports scraping ~300-400+ talks
 - [ ] `scripts/output/talks.json` exists and contains talk objects
-- [ ] `03_import_data.py` completes and reports successful import of ~80,000 sentences
-- [ ] `scripts/output/sentences.json` exists with sentence records
-- [ ] Supabase Dashboard → Table Editor → `sentence_embeddings` shows data
+- [ ] `03_import_data.py` completes and reports imported paragraph chunks
+- [ ] `scripts/output/paragraphs.json` exists with paragraph records
+- [ ] Supabase Dashboard → Table Editor → `paragraph_embeddings` shows data, and the existing `sentence_embeddings` rows remain
 - [ ] On your site: **🔍 Keyword Search** turns green and returns results!
 
 ## 🎉 Milestone: First green light! Keyword Search works!

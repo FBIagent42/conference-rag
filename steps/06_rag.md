@@ -45,13 +45,13 @@ Your Question: "How can I find peace during hard times?"
     → Sends question to OpenAI
     → Returns 1,536-dimensional embedding
     ↓
-2. Vector Search (match_sentences)
-    → pgvector finds 20 most similar sentences
+2. Vector Search (`match_sentences()` or `match_paragraphs()`)
+    → pgvector finds 20 most similar chunks (sentence or paragraph, selected in the UI)
     → Groups by talk_id, ranks by relevance
     → Returns top 3 talks
     ↓
 3. Fetch full talk text
-    → Retrieves all sentences for the top 3 talks
+    → Retrieves all chunks for the top 3 talks using the selected chunking strategy
     → Reconstructs complete talk context
     ↓
 4. generate-answer Edge Function

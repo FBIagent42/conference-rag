@@ -15,7 +15,7 @@
 
 ## Why This Matters
 
-Your database is the foundation for all three search modes. The schema you create here includes the `sentence_embeddings` table (where all your conference talk data will live) and the `match_sentences()` function (which powers semantic search later). Getting this right means everything else builds on a solid base.
+Your database is the foundation for all three search modes. The schema creates a sentence table for the original chunks and a separate paragraph table for the paragraph-chunking comparison. Keeping the tables separate lets you add paragraph embeddings without deleting your existing sentence embeddings.
 
 ## What to Do
 
@@ -27,10 +27,11 @@ python scripts/01_create_schema.py
 
 This script creates:
 - **pgvector extension** — Adds vector data type and similarity operators to PostgreSQL
-- **`sentence_embeddings` table** — Stores talk sentences with their embedding vectors (🔒 **auth-only**)
+- **`sentence_embeddings` table** — Stores the original sentence chunks (🔒 **auth-only**)
+- **`paragraph_embeddings` table** — Stores paragraph chunks alongside the original sentence data (🔒 **auth-only**)
 - **`page_views` table** — Records every page visit (🌍 **public**)
 - **RLS policies** — Controls who can access each table
-- **`match_sentences()` function** — A stored procedure for vector similarity search
+- **`match_sentences()` and `match_paragraphs()` functions** — Separate vector searches for each chunking strategy
 
 > 💡 **Ask your AI assistant**: *"What is pgvector and how does cosine similarity search work?"*
 
@@ -40,8 +41,9 @@ This script creates:
 |-------|--------------|----------------|------|
 | `page_views` | 🌍 Anyone (anon + authenticated) | 🌍 Anyone | Public analytics — no secrets here |
 | `sentence_embeddings` | 🔒 Authenticated users only | 🔒 Service role only | Protected content — requires login |
+| `paragraph_embeddings` | 🔒 Authenticated users only | 🔒 Service role only | Paragraph chunks for comparison |
 
-This is **Row Level Security (RLS)** in action. Both tables have RLS enabled, but their *policies* define very different access rules.
+This is **Row Level Security (RLS)** in action. Both embedding tables are auth-only; paragraph_embeddings adds a chunking strategy while leaving sentence rows intact. page_views remains public.
 
 ### Understanding the Schema
 
@@ -128,7 +130,7 @@ print(f"sentence_embeddings: {len(result.data)} rows (expected: 0) 🔒")
 
 - [ ] Script prints "✅ Database schema created successfully!"
 - [ ] Script prints "✅ Table verified" with a row count
-- [ ] You can see both `sentence_embeddings` and `page_views` in Supabase Dashboard → Table Editor
+- [ ] You can see `sentence_embeddings`, `paragraph_embeddings`, and `page_views` in Supabase Dashboard → Table Editor
 - [ ] (Optional) The RLS test snippet shows `page_views` is readable but `sentence_embeddings` returns 0 rows
 
 ## → Next: [Step 04: Scrape & Import Data](04_scrape_and_import.md)

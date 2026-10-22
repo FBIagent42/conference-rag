@@ -35,8 +35,8 @@ Your app has three search modes that **light up** as you complete each milestone
        │         ↓ Returns embedding vector
        │
        ├─── Supabase Database (pgvector)
-       │         ↓ match_sentences()
-       │         ↓ Returns similar sentences
+       │         ↓ match_sentences() or match_paragraphs()
+       │         ↓ Returns similar chunks (selected in the UI)
        │         ↓ Grouped by talk, ranked
        │
        └─── Edge Function: generate-answer

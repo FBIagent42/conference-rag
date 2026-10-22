@@ -26,29 +26,30 @@ def check_public_page_views():
         print(f"page_views: query failed: {exc}")
 
 
-def check_protected_embeddings():
+def check_protected_embeddings(table_name):
     try:
-        result = client.table("sentence_embeddings").select("*").limit(5).execute()
+        result = client.table(table_name).select("*").limit(5).execute()
         rows = result.data or []
         if rows:
             print(
-                f"sentence_embeddings: UNEXPECTED access; received {len(rows)} rows. "
+                f"{table_name}: UNEXPECTED access; received {len(rows)} rows. "
                 "Review the table's RLS policies."
             )
         else:
             print(
-                "sentence_embeddings: 0 rows, as expected for anon. "
+                f"{table_name}: 0 rows, as expected for anon. "
                 "This could also mean the table is empty."
             )
     except Exception as exc:
         message = str(exc)
         lowered = message.lower()
         if "42501" in message or "permission denied" in lowered or "not allowed" in lowered:
-            print("sentence_embeddings: access denied for anon, as expected")
+            print(f"{table_name}: access denied for anon, as expected")
         else:
-            print(f"sentence_embeddings: query failed: {message}")
+            print(f"{table_name}: query failed: {message}")
 
 
 if __name__ == "__main__":
     check_public_page_views()
-    check_protected_embeddings()
+    check_protected_embeddings("sentence_embeddings")
+    check_protected_embeddings("paragraph_embeddings")

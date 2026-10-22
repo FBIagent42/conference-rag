@@ -74,7 +74,7 @@ Briefly describe how your AI coding assistant helped you during this assignment:
 Want to take this further? Try these challenges:
 
 ### Try Different Chunking
-Compare sentence-level vs. paragraph-level chunking. Which gives better results for different types of questions?
+Use the app's **Text chunks** selector to compare sentence-level and paragraph-level embeddings. Which gives better results for different types of questions?
 
 ### Build a Citation Viewer
 When RAG returns an answer, link each citation to the original talk so users can read the full context.

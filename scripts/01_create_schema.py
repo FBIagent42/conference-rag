@@ -1,7 +1,7 @@
 """
 Step 1: Create Database Schema
 ================================
-Creates the sentence_embeddings and question_embedding_cache tables,
+Creates the sentence_embeddings, paragraph_embeddings, and question_embedding_cache tables,
 pgvector extension, Row Level Security policies, and the match_sentences()
 function in your Supabase database.
 
@@ -113,7 +113,38 @@ ON page_views FOR SELECT
 TO anon, authenticated
 USING (true);
 
--- Return distinct filter values sourced from rows the signed-in user can read.
+-- Store paragraph chunks separately from the existing sentence-level data.
+CREATE TABLE IF NOT EXISTS paragraph_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    talk_id UUID NOT NULL,
+    title TEXT NOT NULL,
+    speaker TEXT,
+    calling TEXT,
+    year INTEGER,
+    season TEXT,
+    url TEXT,
+    paragraph_num INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding vector(1536),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (talk_id, paragraph_num)
+);
+
+CREATE INDEX IF NOT EXISTS paragraph_embeddings_talk_order_idx
+ON paragraph_embeddings(talk_id, paragraph_num);
+
+CREATE INDEX IF NOT EXISTS paragraph_embeddings_embedding_hnsw_idx
+ON paragraph_embeddings USING hnsw (embedding vector_cosine_ops);
+
+ALTER TABLE paragraph_embeddings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow authenticated users to read paragraphs" ON paragraph_embeddings;
+CREATE POLICY "Allow authenticated users to read paragraphs"
+ON paragraph_embeddings FOR SELECT
+TO authenticated
+USING (true);
+
+-- Return distinct filter values from either chunk table, visible under RLS.
 CREATE OR REPLACE FUNCTION get_search_filter_options()
 RETURNS TABLE (
   year integer,
@@ -123,14 +154,20 @@ RETURNS TABLE (
 LANGUAGE sql STABLE
 AS $$
   SELECT DISTINCT
-    se.year,
-    se.season,
-    se.speaker
-  FROM sentence_embeddings AS se
-  WHERE se.year IS NOT NULL
-     OR se.season IS NOT NULL
-     OR (se.speaker IS NOT NULL AND btrim(se.speaker) <> '')
-  ORDER BY se.year DESC NULLS LAST, se.season NULLS LAST, se.speaker NULLS LAST;
+    filter_values.year,
+    filter_values.season,
+    filter_values.speaker
+  FROM (
+    SELECT se.year, se.season, se.speaker FROM sentence_embeddings AS se
+    UNION
+    SELECT pe.year, pe.season, pe.speaker FROM paragraph_embeddings AS pe
+  ) AS filter_values
+  WHERE filter_values.year IS NOT NULL
+     OR filter_values.season IS NOT NULL
+     OR (filter_values.speaker IS NOT NULL AND btrim(filter_values.speaker) <> '')
+  ORDER BY filter_values.year DESC NULLS LAST,
+           filter_values.season NULLS LAST,
+           filter_values.speaker NULLS LAST;
 $$;
 
 GRANT EXECUTE ON FUNCTION get_search_filter_options() TO authenticated;
@@ -164,7 +201,8 @@ AS $$
     sentence_embeddings.text,
     1 - (sentence_embeddings.embedding <=> query_embedding) as similarity
   FROM sentence_embeddings
-  WHERE (filter_year IS NULL OR sentence_embeddings.year = filter_year)
+  WHERE sentence_embeddings.embedding IS NOT NULL
+    AND (filter_year IS NULL OR sentence_embeddings.year = filter_year)
     AND (filter_season IS NULL OR sentence_embeddings.season = filter_season)
     AND (filter_speaker IS NULL OR sentence_embeddings.speaker = filter_speaker)
   ORDER BY sentence_embeddings.embedding <=> query_embedding
@@ -172,6 +210,46 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION match_sentences(vector, integer, integer, text, text) TO authenticated;
+
+-- Paragraph-level vector search with the same optional UI filters.
+DROP FUNCTION IF EXISTS match_paragraphs(vector, integer);
+DROP FUNCTION IF EXISTS match_paragraphs(vector, integer, integer, text, text);
+CREATE FUNCTION match_paragraphs(
+  query_embedding vector(1536),
+  match_count integer DEFAULT 20,
+  filter_year integer DEFAULT NULL,
+  filter_season text DEFAULT NULL,
+  filter_speaker text DEFAULT NULL
+)
+RETURNS TABLE (
+  id uuid,
+  talk_id uuid,
+  title text,
+  speaker text,
+  url text,
+  text text,
+  similarity float
+)
+LANGUAGE sql STABLE
+AS $$
+  SELECT
+    pe.id,
+    pe.talk_id,
+    pe.title,
+    pe.speaker,
+    pe.url,
+    pe.text,
+    1 - (pe.embedding <=> query_embedding) AS similarity
+  FROM paragraph_embeddings AS pe
+  WHERE pe.embedding IS NOT NULL
+    AND (filter_year IS NULL OR pe.year = filter_year)
+    AND (filter_season IS NULL OR pe.season = filter_season)
+    AND (filter_speaker IS NULL OR pe.speaker = filter_speaker)
+  ORDER BY pe.embedding <=> query_embedding
+  LIMIT match_count;
+$$;
+
+GRANT EXECUTE ON FUNCTION match_paragraphs(vector, integer, integer, text, text) TO authenticated;
 """
 
     url = f"https://api.supabase.com/v1/projects/{SUPABASE_PROJECT_REF}/database/query"
@@ -193,7 +271,9 @@ GRANT EXECUTE ON FUNCTION match_sentences(vector, integer, integer, text, text) 
     for attempt in range(5):
         try:
             result = client.table('sentence_embeddings').select('id', count='exact').limit(1).execute()
-            print(f"✅ Table verified. Current rows: {result.count or 0}")
+            print(f"✅ sentence_embeddings verified. Current rows: {result.count or 0}")
+            paragraph_result = client.table('paragraph_embeddings').select('id', count='exact').limit(1).execute()
+            print(f"✅ paragraph_embeddings verified. Current rows: {paragraph_result.count or 0}")
             return True
         except Exception:
             if attempt < 4:
