@@ -1,9 +1,9 @@
 """
 Step 1: Create Database Schema
 ================================
-Creates the sentence_embeddings table, pgvector extension,
-Row Level Security policies, and the match_sentences() function
-in your Supabase database.
+Creates the sentence_embeddings and question_embedding_cache tables,
+pgvector extension, Row Level Security policies, and the match_sentences()
+function in your Supabase database.
 
 Usage:
     python scripts/01_create_schema.py
@@ -71,6 +71,18 @@ CREATE POLICY "Allow authenticated users to read"
 ON sentence_embeddings FOR SELECT
 TO authenticated
 USING (true);
+
+-- Cache question embeddings so repeated questions do not need a new
+-- OpenAI embedding request. No client policies are created; access will
+-- be provided by the server-side Edge Function.
+CREATE TABLE IF NOT EXISTS question_embedding_cache (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    normalized_question TEXT NOT NULL UNIQUE,
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE question_embedding_cache ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
 -- Page Views table (PUBLIC access for RLS demo)
